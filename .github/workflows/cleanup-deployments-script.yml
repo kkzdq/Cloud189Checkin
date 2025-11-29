@@ -1,0 +1,61 @@
+name: Prune Old Deployments
+
+on:
+  schedule:
+    - cron: '0 9 * * *' # 每天运行一次
+  workflow_dispatch:
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    permissions:
+      deployments: write # 必须赋予写权限
+    steps:
+      - name: Prune deployments older than 7 days
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const daysToKeep = 7;
+            const msToKeep = daysToKeep * 24 * 60 * 60 * 1000;
+            const thresholdDate = new Date(Date.now() - msToKeep);
+
+            // 获取当前仓库的所有部署
+            const deployments = await github.paginate(
+              github.rest.repos.listDeployments,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                per_page: 100,
+              }
+            );
+
+            console.log(`Found ${deployments.length} deployments.`);
+
+            for (const deployment of deployments) {
+              const createdDate = new Date(deployment.created_at);
+              
+              // 如果部署记录早于设定的时间
+              if (createdDate < thresholdDate) {
+                console.log(`Deleting deployment ${deployment.id} created at ${deployment.created_at}`);
+                
+                try {
+                  // 1. 先将其标记为 inactive (如果是 active 状态通常无法直接删除)
+                  // 这一步是可选的，取决于你的部署状态，但在删除前设为 inactive 是最佳实践
+                  await github.rest.repos.createDeploymentStatus({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    deployment_id: deployment.id,
+                    state: 'inactive'
+                  });
+
+                  // 2. 删除部署记录
+                  await github.rest.repos.deleteDeployment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    deployment_id: deployment.id,
+                  });
+                } catch (error) {
+                  console.error(`Failed to delete deployment ${deployment.id}: ${error.message}`);
+                }
+              }
+            }
